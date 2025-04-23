@@ -1,24 +1,32 @@
 @Service
 @RequiredArgsConstructor
-public class AnalyticsService {
+public class AdditionalService {
     private final RestTemplate restTemplate;
     private final ObservabilityService observability;
+
+    @Value("${main.service.url}")
+    private String mainServiceUrl;
 
     public double getAverageDuration(String fio, int month, int year) {
         long start = System.currentTimeMillis();
         try {
-            List<Session> sessions = restTemplate.getForObject(
-                "http://main-service/sessions?fio={fio}",
-                List.class,
+            ResponseEntity<List<Session>> response = restTemplate.exchange(
+                mainServiceUrl + "/sessions/by-fio?fio={fio}",
+                HttpMethod.GET,
+                null,
+                new ParameterizedTypeReference<List<Session>>() {},
                 fio
             );
-            return sessions.stream()
-                .filter(s -> s.getDate().getMonthValue() == month)
-                .mapToInt(Session::getDuration)
-                .average()
-                .orElse(0.0);
-        } finally {
-            observability.recordTiming("analytics.calculate", System.currentTimeMillis() - start);
+
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new RuntimeException("Main service error");
+            }
+
+            List<Session> sessions = response.getBody();
+            return calculateAverage(sessions, month);
+        } catch (Exception e) {
+            observability.recordTiming("additional.service.error", System.currentTimeMillis() - start);
+            throw e;
         }
     }
 }
