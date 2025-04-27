@@ -1,5 +1,13 @@
+FROM gradle:8.5-jdk21-alpine AS builder
+WORKDIR /app
+COPY build.gradle settings.gradle gradlew ./
+COPY gradle ./gradle
+RUN gradle --no-daemon dependencies
+COPY src ./src
+RUN gradle bootJar --parallel --no-daemon
+
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
-COPY build/libs/additional-service-1.0-SNAPSHOT.jar app.jar
+COPY --from=builder /app/build/libs/*.jar app.jar
+EXPOSE 8081
 ENTRYPOINT ["java", "-jar", "app.jar"]
-

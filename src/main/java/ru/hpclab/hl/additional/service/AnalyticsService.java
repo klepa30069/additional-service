@@ -1,3 +1,11 @@
+package ru.hpclab.hl.additional.service;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.stream.Collectors;
+
 @Service
 @RequiredArgsConstructor
 public class AdditionalService {

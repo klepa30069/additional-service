@@ -1,4 +1,4 @@
-package ru.hpclab.hl.module1.metrics;
+package ru.hpclab.hl.additional.metrics;
 
 import java.util.LongSummaryStatistics;
 
