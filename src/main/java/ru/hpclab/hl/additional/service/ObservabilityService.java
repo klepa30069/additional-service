@@ -3,7 +3,7 @@ package ru.hpclab.hl.additional.service;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import ru.hpclab.hl.module1.metrics.TimingStats;
+import ru.hpclab.hl.additional.metrics.TimingStats;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
