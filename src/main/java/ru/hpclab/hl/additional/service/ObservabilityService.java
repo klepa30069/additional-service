@@ -25,7 +25,7 @@ public class ObservabilityService {
                .addRecord(durationMs);
     }
 
-    @Scheduled(fixedRate = 60_000)
+    @Scheduled(fixedRate = 10_000)
     public void logMetrics() {
         if (metrics.isEmpty()) {
             log.info("No metrics collected yet");
@@ -33,17 +33,35 @@ public class ObservabilityService {
         }
 
         log.info("=== Performance Metrics Report ===");
+        log.info("=== Last 10 seconds ===");
+        printStatsForPeriod(10_000);
+
+        log.info("=== Last 30 seconds ===");
+        printStatsForPeriod(30_000);
+
+        log.info("=== Last 1 minute ===");
+        printStatsForPeriod(60_000);
+
+        log.info("=================================");
+        log.info("[CACHE] Visitor Cache - Size: {}", visitorCache.size());
+        log.info("=================================");
+    }
+
+    private void printStatsForPeriod(long periodMs) {
         metrics.forEach((name, stats) -> {
-            log.info("[{}] {}", name, stats.getSummary());
+            TimingStats.StatsSnapshot snapshot = stats.getStats(periodMs);
+            if (snapshot.count > 0) {
+                log.info("[{}] count={}, avg={}ms, min={}ms, max={}ms",
+                    name,
+                    snapshot.count,
+                    snapshot.avg,
+                    snapshot.min,
+                    snapshot.max);
+            }
         });
-        log.info("=================================");
-        log.info("[CACHE] Visitor Cache - Size: {}",
-            visitorCache.size());
-        log.info("=================================");
     }
 
     public TimingStats getMetric(String name) {
         return metrics.get(name);
     }
 }
-

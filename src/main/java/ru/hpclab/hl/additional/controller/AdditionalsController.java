@@ -8,6 +8,7 @@ import ru.hpclab.hl.additional.service.AdditionalService;
 import ru.hpclab.hl.additional.service.ObservabilityService;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/additionals")
@@ -17,15 +18,10 @@ public class AdditionalsController {
     private final ObservabilityService observabilityService;
 
     @GetMapping("/average-duration")
-    public ResponseEntity<Double> getAverageDuration(
-        @RequestParam String fio,
-        @RequestParam int month,
-        @RequestParam int year) {
+    public Map<String, Map<Integer, Double>> getMonthlyStats() {
         long startTime = System.currentTimeMillis();
-
         try {
-            double average = additionalService.calculateAverageDuration(fio, month, year);
-            return ResponseEntity.ok(average);
+            return additionalService.getAllUsersMonthlyAverageDuration();
         } finally {
             observabilityService.recordTiming("controller.additionals.average_duration",
                 System.currentTimeMillis() - startTime);

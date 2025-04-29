@@ -2,154 +2,91 @@ package ru.hpclab.hl.additional.service;
 
 import lombok.extern.slf4j.Slf4j;
 import lombok.RequiredArgsConstructor;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.http.HttpMethod;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
 import ru.hpclab.hl.additional.model.Session;
 import ru.hpclab.hl.additional.model.Visitor;
 import ru.hpclab.hl.additional.cache.VisitorCache;
 
 import java.util.*;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class AdditionalService {
-    private final RestTemplate restTemplate;
+    private final MainClient mainClient;
     private final ObservabilityService observabilityService;
     private final VisitorCache visitorCache;
 
-    public List<Session> getSessionsByFio(String fio) {
+    public Map<String, Map<Integer, Double>> getAllUsersMonthlyAverageDuration() {
         long startTime = System.currentTimeMillis();
 
         try {
-            // Используем существующий метод getAllSessionsWithTiming()
-            Set<UUID> visitorIds = getAllSessionsWithTiming().stream()
+            List<Session> allSessions = mainClient.getAllSessions();
+
+            if (allSessions == null || allSessions.isEmpty()) {
+                log.warn("No sessions received from main service");
+                return Collections.emptyMap();
+            }
+
+            Set<UUID> visitorIds = allSessions.stream()
                 .map(Session::getVisitorId)
                 .collect(Collectors.toSet());
 
-            List<Visitor> visitors = visitorIds.stream()
-                .map(this::getCachedOrLoadVisitor)
-                .filter(Objects::nonNull)
-                .filter(v -> v.getFio().equalsIgnoreCase(fio))
-                .collect(Collectors.toList());
+            Map<UUID, Visitor> visitors = getVisitorsWithCache(visitorIds);
 
-            return getAllSessionsWithTiming().stream()
-                .filter(s -> visitors.stream()
-                    .anyMatch(v -> v.getID().equals(s.getVisitorId())))
-                .collect(Collectors.toList());
+            return allSessions.stream()
+                .collect(Collectors.groupingBy(
+                    session -> {
+                        Visitor visitor = visitors.get(session.getVisitorId());
+                        return visitor != null ? visitor.getFio() : "Unknown";
+                    },
+                    Collectors.groupingBy(
+                        session -> session.getDate().getMonthValue(),
+                        Collectors.averagingInt(Session::getDuration)
+                    )
+                ));
         } finally {
-            observabilityService.recordTiming("service.additionals.get_sessions_by_fio",
-                System.currentTimeMillis() - startTime);
+            observabilityService.recordTiming(
+                "additional.stats.monthly",
+                System.currentTimeMillis() - startTime
+            );
         }
     }
 
-    private Visitor getCachedOrLoadVisitor(UUID id) {
-        long startTime = System.currentTimeMillis();
+    private Map<UUID, Visitor> getVisitorsWithCache(Set<UUID> ids) {
+        Map<UUID, Visitor> visitors = new HashMap<>();
+        long start = System.currentTimeMillis();
 
         try {
-            Visitor v = visitorCache.get(id);
-            if (v == null) {
-                v = restTemplate.getForObject("http://main-service:8080/visitors/" + id, Visitor.class);
-                if (v != null) {
-                    visitorCache.put(id, v);
+            for (UUID id : ids) {
+                long visitorStart = System.currentTimeMillis();
+                try {
+                    Visitor visitor = visitorCache.get(id);
+
+                    if (visitor == null) {
+                        visitor = mainClient.getVisitor(id);
+                        if (visitor != null) {
+                            visitorCache.put(id, visitor);
+                        }
+                    }
+
+                    if (visitor != null) {
+                        visitors.put(id, visitor);
+                    }
+                } finally {
+                    observabilityService.recordTiming(
+                        "external.main.visitors.get.single",
+                        System.currentTimeMillis() - visitorStart
+                    );
                 }
             }
-            return v;
+            return visitors;
         } finally {
-            observabilityService.recordTiming("service.additionals.get_cache_or_load_visitor",
-                System.currentTimeMillis() - startTime);
-        }
-    }
-
-    private List<Visitor> getVisitorsWithTiming(String fio) {
-        long startTime = System.currentTimeMillis();
-        try {
-            List<Visitor> allVisitors = restTemplate.exchange(
-                "http://main-service:8080/visitors",
-                HttpMethod.GET,
-                null,
-                new ParameterizedTypeReference<List<Visitor>>() {}
-            ).getBody();
-
-            if (allVisitors == null) return Collections.emptyList();
-
-            allVisitors.forEach(visitor ->
-                visitorCache.put(visitor.getID(), visitor));
-
-            return allVisitors.stream()
-                .filter(v -> v.getFio().equalsIgnoreCase(fio))
-                .collect(Collectors.toList());
-        } finally {
-            observabilityService.recordTiming("service.additionals.get_visitors",
-                System.currentTimeMillis() - startTime);
-        }
-    }
-
-    private List<Session> getAllSessionsWithTiming() {
-        long startTime = System.currentTimeMillis();
-        try {
-            List<Session> sessions = restTemplate.exchange(
-                "http://main-service:8080/sessions",
-                HttpMethod.GET,
-                null,
-                new ParameterizedTypeReference<List<Session>>() {}
-            ).getBody();
-            return sessions != null ? sessions : Collections.emptyList();
-        } finally {
-            observabilityService.recordTiming("service.additionals.get_all_sessions",
-                System.currentTimeMillis() - startTime);
-        }
-    }
-
-    private List<Session> filterSessions(List<Visitor> visitors, List<Session> sessions) {
-        long startTime = System.currentTimeMillis();
-
-        try {
-            Set<UUID> visitorIds = visitors.stream()
-                .map(Visitor::getID)
-                .collect(Collectors.toSet());
-
-            return sessions.stream()
-                .filter(session -> visitorIds.contains(session.getVisitorId()))
-                .collect(Collectors.toList());
-        } finally {
-            observabilityService.recordTiming("servie.additionals.filter_sessions",
-                System.currentTimeMillis() - startTime);
-        }
-    }
-
-    public double calculateAverageDuration(String fio, int month, int year) {
-        long startTime = System.currentTimeMillis();
-
-        try {
-            List<Visitor> visitors = getVisitorsWithTiming(fio);
-            if (visitors.isEmpty()) {
-                return 0;
-            }
-
-            List<Session> filteredSessions = getAllSessionsWithTiming().stream()
-                .filter(s -> visitors.stream()
-                    .anyMatch(v -> v.getID().equals(s.getVisitorId())))
-                .filter(s -> s.getDate().getMonthValue() == month && s.getDate().getYear() == year)
-                .collect(Collectors.toList());
-
-            if (filteredSessions.isEmpty()) {
-                return 0;
-            }
-
-            double average = filteredSessions.stream()
-                .mapToInt(Session::getDuration)
-                .average()
-                .orElse(0);
-
-            return average;
-        } finally {
-            observabilityService.recordTiming("service.additionals.calculate_average_duration",
-                System.currentTimeMillis() - startTime);
+            observabilityService.recordTiming(
+                "external.main.visitors.batch",
+                System.currentTimeMillis() - start
+            );
         }
     }
 }
