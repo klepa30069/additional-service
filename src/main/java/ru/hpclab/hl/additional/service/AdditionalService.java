@@ -1,51 +1,44 @@
 package ru.hpclab.hl.additional.service;
 
 import lombok.extern.slf4j.Slf4j;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import ru.hpclab.hl.additional.model.Session;
 import ru.hpclab.hl.additional.model.Visitor;
-import ru.hpclab.hl.additional.cache.VisitorCache;
+import ru.hpclab.hl.additional.cache.RedisVisitorCache;
 
 import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class AdditionalService {
     private final MainClient mainClient;
+    private final RedisVisitorCache visitorCache;
     private final ObservabilityService observabilityService;
-    private final VisitorCache visitorCache;
+
+    public AdditionalService(MainClient mainClient,
+                           RedisVisitorCache visitorCache,
+                           ObservabilityService observabilityService) {
+        this.mainClient = mainClient;
+        this.visitorCache = visitorCache;
+        this.observabilityService = observabilityService;
+    }
 
     public Map<String, Map<Integer, Double>> getAllUsersMonthlyAverageDuration() {
         long startTime = System.currentTimeMillis();
 
         try {
-            List<Session> allSessions = mainClient.getAllSessions();
+            List<Session> allSessions = getAllSessionsWithMetrics();
 
             if (allSessions == null || allSessions.isEmpty()) {
                 log.warn("No sessions received from main service");
                 return Collections.emptyMap();
             }
 
-            Set<UUID> visitorIds = allSessions.stream()
-                .map(Session::getVisitorId)
-                .collect(Collectors.toSet());
-
+            Set<UUID> visitorIds = extractUniqueVisitorIds(allSessions);
             Map<UUID, Visitor> visitors = getVisitorsWithCache(visitorIds);
 
-            return allSessions.stream()
-                .collect(Collectors.groupingBy(
-                    session -> {
-                        Visitor visitor = visitors.get(session.getVisitorId());
-                        return visitor != null ? visitor.getFio() : "Unknown";
-                    },
-                    Collectors.groupingBy(
-                        session -> session.getDate().getMonthValue(),
-                        Collectors.averagingInt(Session::getDuration)
-                    )
-                ));
+            return calculateMonthlyAverages(allSessions, visitors);
         } finally {
             observabilityService.recordTiming(
                 "additional.stats.monthly",
@@ -54,30 +47,43 @@ public class AdditionalService {
         }
     }
 
+    private List<Session> getAllSessionsWithMetrics() {
+        long startTime = System.currentTimeMillis();
+
+        try {
+            List<Session> sessions = mainClient.getAllSessions();
+            log.debug("Retrieved {} sessions from main service", sessions.size());
+            return sessions;
+        } finally {
+            observabilityService.recordTiming(
+                "additional.stats.get_all_sessions",
+                System.currentTimeMillis() - startTime
+            );
+        }
+    }
+
+    private Set<UUID> extractUniqueVisitorIds(List<Session> sessions) {
+        return sessions.stream()
+                .map(Session::getVisitorId)
+                .collect(Collectors.toSet());
+    }
+
     private Map<UUID, Visitor> getVisitorsWithCache(Set<UUID> ids) {
         Map<UUID, Visitor> visitors = new HashMap<>();
-        long start = System.currentTimeMillis();
+        long batchStart = System.currentTimeMillis();
 
         try {
             for (UUID id : ids) {
-                long visitorStart = System.currentTimeMillis();
+                long singleStart = System.currentTimeMillis();
                 try {
-                    Visitor visitor = visitorCache.get(id);
-
-                    if (visitor == null) {
-                        visitor = mainClient.getVisitor(id);
-                        if (visitor != null) {
-                            visitorCache.put(id, visitor);
-                        }
-                    }
-
+                    Visitor visitor = getVisitorWithCache(id);
                     if (visitor != null) {
                         visitors.put(id, visitor);
                     }
                 } finally {
                     observabilityService.recordTiming(
                         "external.main.visitors.get.single",
-                        System.currentTimeMillis() - visitorStart
+                        System.currentTimeMillis() - singleStart
                     );
                 }
             }
@@ -85,9 +91,43 @@ public class AdditionalService {
         } finally {
             observabilityService.recordTiming(
                 "external.main.visitors.batch",
-                System.currentTimeMillis() - start
+                System.currentTimeMillis() - batchStart
             );
         }
+    }
+
+    private Visitor getVisitorWithCache(UUID visitorId) {
+        log.debug("Checking cache for visitor ID: {}", visitorId);
+        Visitor visitor = visitorCache.get(visitorId);
+
+        if (visitor == null) {
+            log.debug("Cache miss, fetching visitor ID: {} from main service", visitorId);
+            visitor = mainClient.getVisitor(visitorId);
+            if (visitor != null) {
+                log.debug("Caching visitor ID: {}", visitorId);
+                visitorCache.put(visitorId, visitor);
+            }
+        }
+        return visitor;
+    }
+
+    private Map<String, Map<Integer, Double>> calculateMonthlyAverages(
+            List<Session> sessions,
+            Map<UUID, Visitor> visitors) {
+
+        return sessions.stream()
+            .collect(Collectors.groupingBy(
+                session -> getVisitorName(session, visitors),
+                Collectors.groupingBy(
+                    session -> session.getDate().getMonthValue(),
+                    Collectors.averagingInt(Session::getDuration)
+                )
+            ));
+    }
+
+    private String getVisitorName(Session session, Map<UUID, Visitor> visitors) {
+        Visitor visitor = visitors.get(session.getVisitorId());
+        return visitor != null ? visitor.getFio() : "Unknown";
     }
 }
 

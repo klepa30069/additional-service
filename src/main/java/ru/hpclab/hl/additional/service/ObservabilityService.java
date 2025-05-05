@@ -4,7 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import ru.hpclab.hl.additional.metrics.TimingStats;
-import ru.hpclab.hl.additional.cache.VisitorCache;
+import ru.hpclab.hl.additional.cache.RedisVisitorCache;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,9 +14,9 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 public class ObservabilityService {
     private final Map<String, TimingStats> metrics = new ConcurrentHashMap<>();
-    private final VisitorCache visitorCache;
+    private final RedisVisitorCache visitorCache;
 
-    public ObservabilityService(VisitorCache visitorCache) {
+    public ObservabilityService(RedisVisitorCache visitorCache) {
         this.visitorCache = visitorCache;
     }
 
